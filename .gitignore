@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+.venv/
+venv/
+env/
+
+# PyInstaller build artifacts
+build/
+dist/
+
+# Release artifacts (attach these to GitHub Releases, don't commit them)
+AutoSmokeAPI-*.zip
+
+# Runtime / user data
+autosmokeapi_state.json
+.image_cache/
+
+# Claude Code workspace (do NOT push)
+.claude/
+
+# IDE
+.vscode/
+.idea/
+*.code-workspace
+
+# OS
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# Logs
+*.log

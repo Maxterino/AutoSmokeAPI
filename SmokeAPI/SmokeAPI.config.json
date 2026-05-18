@@ -1,0 +1,12 @@
+{
+  "$schema": "https://raw.githubusercontent.com/acidicoala/SmokeAPI/refs/tags/v4.0.0/res/SmokeAPI.schema.json",
+  "$version": 4,
+  "logging": true,
+  "log_steam_http": false,
+  "default_app_status": "unlocked",
+  "override_app_status": {},
+  "override_dlc_status": {},
+  "auto_inject_inventory": true,
+  "extra_inventory_items": [],
+  "extra_dlcs": {}
+}
