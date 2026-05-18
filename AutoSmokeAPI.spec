@@ -1,11 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
-# PyInstaller spec for AutoSmokeAPI.
-#
-# Build with:  pyinstaller AutoSmokeAPI.spec --clean --noconfirm
-#
-# Produces dist/AutoSmokeAPI/AutoSmokeAPI.exe alongside its support files.
-# The SmokeAPI/ payload and logo/ folder are bundled and read at runtime via
-# core.APP_DIR (which resolves to sys._MEIPASS when frozen).
+# PyInstaller spec. Build with: pyinstaller AutoSmokeAPI.spec --clean --noconfirm
+# (or just run build.bat).
 
 import sys
 from pathlib import Path
@@ -34,8 +29,7 @@ a = Analysis(
     hookspath=[],
     runtime_hooks=[],
     excludes=[
-        # Trim unused stdlib + third-party stuff to shrink the bundle and
-        # reduce AV false-positive surface area.
+        # Trim unused stdlib + third-party stuff to shrink the bundle.
         'tkinter.test', 'unittest', 'pydoc_data',
         'matplotlib', 'numpy', 'scipy', 'pandas',
     ],
@@ -55,8 +49,8 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=False,  # UPX-compressed PyInstaller exes get flagged by antivirus heuristics
-    console=False,  # GUI app — no console window
+    upx=False,  # UPX-compressed PyInstaller exes trip AV heuristics
+    console=False,
     disable_windowed_traceback=False,
     target_arch=None,
     codesign_identity=None,

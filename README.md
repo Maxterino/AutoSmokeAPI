@@ -1,84 +1,113 @@
 # AutoSmokeAPI
 
-A GUI front-end for applying [SmokeAPI](https://github.com/acidicoala/SmokeAPI) (Steamworks DLC unlocker) in **proxy mode** to many games at once.
+A simple Windows app that applies **[SmokeAPI](https://github.com/acidicoala/SmokeAPI)** - a Steam DLC unlocker - to many games at once.
+
+Pick your games (or auto-scan), click **Patch**, done. Click **Revert** to undo.
 
 ![screenshot](docs/screenshot.png)
 
+---
+
 ## Download
 
-Grab the latest **AutoSmokeAPI.zip** from the [releases page](https://github.com/Maxterino/AutoSmokeAPI/releases), unzip it anywhere, and double-click **AutoSmokeAPI.exe**.
+**[Download the latest release →](https://github.com/Maxterino/AutoSmokeAPI/releases/latest)**
 
-No installation, no Python, no `pip` — everything is bundled.
+1. Download `AutoSmokeAPI-vX.Y.Z.zip`
+2. Right-click → **Extract All…** (anywhere - your Desktop is fine)
+3. Open the extracted folder and double-click **`AutoSmokeAPI.exe`**
 
-## Features
+No installation. No Python. No setup. Everything is bundled inside the zip.
 
-- **Add games** by browsing for `steam_api.dll` / `steam_api64.dll`, drag-and-drop, or auto-scan
-- **Auto-scan** every drive for Steam libraries — typically finishes in seconds with live progress in the activity log
-- **Steam header image** shown next to each game (cached locally after first download)
-- **Detects 32-bit vs 64-bit** from the DLL's PE header and picks the right SmokeAPI DLL
-- **Bulk Patch / Revert** with confirmation prompts
-- **Patch status** per game (PATCHED / UNPATCHED / MISSING)
-- **Remove all** to clear the list in one click
-- **Persistent game list** across sessions
-- **Optional `SmokeAPI.config.json` deployment** with a hover tooltip explaining what it does
-- **Activity log** for visibility into each operation
-- **Update check** against the latest SmokeAPI GitHub release
+---
 
-## How patching works (proxy mode)
+## How to use it
 
-For each selected game:
+### Adding games
 
-- 64-bit game: `steam_api64.dll` → renamed to `steam_api64_o.dll`, then `smoke_api64.dll` is copied in as `steam_api64.dll`
-- 32-bit game: `steam_api.dll`   → renamed to `steam_api_o.dll`,   then `smoke_api32.dll` is copied in as `steam_api.dll`
+You have three ways to add games to the list:
 
-Revert restores the `_o` backup. If you opted in to "Deploy SmokeAPI.config.json", that file is dropped next to the DLL on patch and removed on revert.
+- **Auto-scan Steam** - click the button. AutoSmokeAPI walks every drive looking for Steam libraries and adds all your installed games in a few seconds. Live progress is shown in the Activity log at the bottom.
+- **+ Select game** - opens a file dialog. Browse to your game's folder and pick `steam_api.dll` or `steam_api64.dll`. Most games keep it next to the .exe, but some bury it in subfolders like `bin\x64\` or `Game_Data\Plugins\`.
+- **Drag & drop** - drag a `steam_api.dll` / `steam_api64.dll` file from File Explorer onto the AutoSmokeAPI window.
 
-Architecture is detected from the DLL's PE header (`Machine` field — `0x014c` x86, `0x8664` x64), not the filename.
+Each game gets its Steam header image, an x86/x64 badge, and a status badge:
 
-## DLC updates
+- **UNPATCHED** - original Steamworks DLL is there
+- **PATCHED** - SmokeAPI is already in place
+- **MISSING** - the DLL is gone (game was uninstalled or moved)
 
-SmokeAPI detects DLCs dynamically from Steam's API at game launch — **you don't need to re-patch when new DLC releases.** Edge case: games with more than 64 unowned DLCs may need manual `extra_dlcs` entries in `SmokeAPI.config.json`, but this is rare.
+### Patching
 
-## Antivirus / SmartScreen
+Tick the games you want to patch and click the green **Patch** button. The app will:
 
-PyInstaller-built executables sometimes trigger Windows SmartScreen ("unknown publisher") or antivirus heuristics. The exe is not signed (code-signing certificates cost money), so SmartScreen may show a warning the first time you run it — click **More info → Run anyway**.
+1. Rename the game's `steam_api.dll` → `steam_api_o.dll` (or `steam_api64.dll` → `steam_api64_o.dll`)
+2. Drop in SmokeAPI's DLL under the original name
 
-If your antivirus quarantines `AutoSmokeAPI.exe`, you can:
+Now launch the game - all DLCs are unlocked.
 
-1. Add an exception in your AV settings, **or**
-2. Build the .exe yourself from source — `build.bat` does this in one step.
+### Reverting
 
-The source is short and auditable: ~3 files (`app.py`, `core.py`, `images.py`, `updates.py`).
+Tick the games you want to revert and click **Revert**. The original Steamworks DLL is restored from the `_o` backup. The game is back to vanilla.
+
+### New DLC released?
+
+You don't need to re-patch. SmokeAPI talks to Steam at runtime and unlocks any new DLC the game queries about. Just launch the game.
+
+(Edge case: a few games hardcode their DLC list and don't ask Steam. For those, you'd need to manually edit `SmokeAPI.config.json` and add the new DLC IDs.)
+
+### Keeping SmokeAPI up to date
+
+The top-right of the window shows the bundled SmokeAPI version. When acidicoala publishes a new SmokeAPI release, an **Update available!** button appears underneath the version number. Click it → confirm → AutoSmokeAPI downloads the new release and replaces the bundled DLLs.
+
+Your already-patched games keep working as-is. If you want them on the newer SmokeAPI, **Revert** then **Patch** them again.
+
+---
+
+## Troubleshooting
+
+**Windows says "Windows protected your PC" when I open the .exe**
+SmartScreen warns about any unsigned program. Click **More info → Run anyway**. AutoSmokeAPI is open-source and you can read every line of the source on this repo.
+
+**My antivirus quarantined `AutoSmokeAPI.exe`**
+This is a false positive - PyInstaller-built executables trip generic heuristics. Either add an exception in your antivirus, or build the .exe yourself from source (see below).
+
+**"Couldn't rename steam_api64.dll" or "Permission denied"**
+The game is probably running. Close it completely (including the launcher) and try again. If it still fails, your game is in `Program Files` - right-click AutoSmokeAPI.exe → **Run as administrator**.
+
+**A patched game crashes on launch**
+A small minority of games don't work with SmokeAPI's *proxy mode* (which is what this tool uses). Revert the patch, then look up the game on [SmokeAPI's docs](https://github.com/acidicoala/SmokeAPI#readme) for instructions about *hook mode + Koaloader* (manual setup).
+
+**The auto-scan didn't find a game**
+Some games keep their `steam_api.dll` in unusual places. Find it manually with File Explorer (search the game folder for `steam_api*.dll`) and add it via **+ Select game** or drag-and-drop.
+
+---
+
+## Privacy
+
+AutoSmokeAPI talks to the internet for two things only:
+
+- **Game cover art** - downloaded once from `cdn.cloudflare.steamstatic.com` per game, then cached locally in `.image_cache/`.
+- **SmokeAPI updates** - checks `api.github.com/repos/acidicoala/SmokeAPI/releases/latest` on startup, and downloads from `github.com/acidicoala/SmokeAPI/releases/download/...` only when you click **Update available!**.
+
+No telemetry. No analytics. No accounts.
+
+---
 
 ## Build from source
 
-Requires Python 3.10+. From the project folder:
+Want to build the .exe yourself instead of trusting the prebuilt one? You'll need [Python 3.10+](https://www.python.org/downloads/) (tick "Add Python to PATH" during install).
 
 ```
+git clone https://github.com/Maxterino/AutoSmokeAPI.git
+cd AutoSmokeAPI
 build.bat
 ```
 
-This installs the build dependencies, runs PyInstaller, and produces `dist\AutoSmokeAPI\` containing the standalone .exe + its support files. Zip that folder to distribute it.
+`build.bat` installs the dependencies and runs PyInstaller. Output: `dist\AutoSmokeAPI\AutoSmokeAPI.exe`.
 
-## Caveats
+---
 
-- Run as Administrator if the game lives in `Program Files`.
-- Close the game before patching/reverting — Windows won't let you replace a loaded DLL.
-- AutoSmokeAPI only handles SmokeAPI's **proxy mode**. If a game refuses to load with proxy mode, check SmokeAPI's docs about hook mode + Koaloader.
+## Credits
 
-## What NOT to commit to git
-
-`.gitignore` already excludes the right things, but for reference, do **not** push:
-
-- `.claude/` — Claude Code workspace metadata
-- `__pycache__/`, `*.pyc` — Python bytecode caches
-- `build/`, `dist/` — PyInstaller build artifacts
-- `*.spec` is intentionally **included** (it's part of the build config)
-- `autosmokeapi_state.json` — your local game list
-- `.image_cache/` — downloaded Steam header thumbnails
-- `.venv/`, `venv/`, `.vscode/`, `.idea/`
-
-Credits:
-
-- SmokeAPI itself by [acidicoala](https://github.com/acidicoala/SmokeAPI)
-- GUI by [Maxterino](https://github.com/Maxterino/AutoSmokeAPI)
+- **SmokeAPI** - the underlying DLC unlocker - by [acidicoala](https://github.com/acidicoala/SmokeAPI). All credit for the actual unlocking work goes to them.
+- **GUI** - by [Maxterino](https://github.com/Maxterino/AutoSmokeAPI).

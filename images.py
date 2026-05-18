@@ -21,8 +21,8 @@ _FALLBACK_URLS = [
 ]
 
 _lock = threading.Lock()
-# Track which appids we've already tried and failed for, so we don't hammer
-# the network repeatedly in a single session.
+# AppIDs that failed once - skip them for the rest of the session so we don't
+# hammer the network for images Steam doesn't have.
 _failed: set[str] = set()
 
 

@@ -11,9 +11,8 @@ from dataclasses import dataclass, asdict, field
 from pathlib import Path
 from typing import Iterable
 
-# APP_DIR is where bundled read-only data lives — inside _MEIPASS when frozen,
-# alongside the script in dev. USER_DIR is for writable state (state file,
-# image cache) and always sits next to the .exe / script.
+# APP_DIR: bundled read-only data (lives in PyInstaller's _MEIPASS when frozen).
+# USER_DIR: writable state next to the .exe; survives across runs.
 APP_DIR = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
 if getattr(sys, "frozen", False):
     USER_DIR = Path(sys.executable).resolve().parent
@@ -106,7 +105,7 @@ class Game:
     path: str
     name: str = ""
     arch: str = ARCH_UNKNOWN
-    appid: str = ""  # Steam app ID, used to fetch the header image
+    appid: str = ""  # Steam app ID, used for the header image lookup
 
     @property
     def dll_path(self) -> Path:
@@ -145,7 +144,7 @@ class Game:
 
 
 def detect_game_name(dll_path: Path) -> str:
-    """Walk up the path to find a folder under steamapps/common/ — that's the game name."""
+    """Walk up the path to find a folder under steamapps/common/ - that's the game name."""
     parts = dll_path.parts
     lower = [p.lower() for p in parts]
     try:
@@ -184,14 +183,13 @@ def patch_game(game: Game, *, deploy_config: bool = False) -> None:
         raise PatchError(f"Missing SmokeAPI DLL: {source}")
 
     if not backup.exists():
-        # Move the real Steamworks DLL aside.
         try:
             dll.rename(backup)
         except OSError as e:
             raise PatchError(f"Could not rename {dll.name} -> {backup.name}: {e}") from e
     elif dll.exists():
-        # Backup already exists; the current DLL is presumably SmokeAPI from a
-        # previous run. Replace it to ensure it matches our shipped version.
+        # The backup already exists, so this DLL is the SmokeAPI proxy from a
+        # previous patch. Drop it and recopy to make sure we match our bundled version.
         try:
             dll.unlink()
         except OSError as e:
@@ -200,7 +198,7 @@ def patch_game(game: Game, *, deploy_config: bool = False) -> None:
     try:
         shutil.copy2(source, dll)
     except OSError as e:
-        # Roll back: restore the backup so the game isn't left broken.
+        # Restore the backup so the game isn't left without any steam_api dll.
         if backup.exists() and not dll.exists():
             try:
                 backup.rename(dll)
@@ -223,7 +221,7 @@ def revert_game(game: Game) -> None:
 
     if not backup.exists():
         if dll.exists() and game.status() == STATUS_UNPATCHED:
-            return  # Nothing to do — already original.
+            return
         raise PatchError(f"No backup found to revert: {backup.name} missing")
 
     if dll.exists():
@@ -237,7 +235,6 @@ def revert_game(game: Game) -> None:
     except OSError as e:
         raise PatchError(f"Could not restore {backup.name} -> {dll.name}: {e}") from e
 
-    # Clean up an optional SmokeAPI.config.json we may have deployed.
     config_target = dll.with_name("SmokeAPI.config.json")
     if config_target.exists():
         try:
@@ -246,17 +243,13 @@ def revert_game(game: Game) -> None:
             pass
 
 
-# ---------------------------------------------------------------------------
-# Steam library scanner
-# ---------------------------------------------------------------------------
-
 _VDF_PATH_RE = re.compile(r'"path"\s*"([^"]+)"', re.IGNORECASE)
 _APPID_FILE_RE = re.compile(r'^appmanifest_(\d+)\.acf$', re.IGNORECASE)
 _INSTALLDIR_RE = re.compile(r'"installdir"\s*"([^"]+)"', re.IGNORECASE)
 _NAME_KV_RE = re.compile(r'"name"\s*"([^"]+)"', re.IGNORECASE)
 
-# Game-internal folders that never contain Steamworks DLLs but can have
-# thousands of files (saves, caches, language packs, etc.).
+# Game subfolders that never hold Steamworks DLLs but can have thousands of
+# files - listing them here speeds the scan up by orders of magnitude.
 _SKIP_SUBFOLDERS = frozenset([
     "saves", "savedata", "savegames", "saved", "logs", "cache", "caches",
     "tmp", "temp", "crashes", "crashreports", "crashdumps",
@@ -266,7 +259,6 @@ _SKIP_SUBFOLDERS = frozenset([
     ".git", ".svn", "node_modules", "__pycache__",
 ])
 
-# Limit how deep we'll walk inside any single game folder.
 _GAME_FOLDER_MAX_DEPTH = 7
 
 
@@ -359,13 +351,14 @@ def find_all_steamapps() -> list[Path]:
         seen.add(key)
         found.append(p)
 
-    # 1. Registry-detected Steam + libraryfolders.vdf
+    # Source 1: registry-detected Steam install + libraryfolders.vdf.
     steam = find_steam_install()
     if steam:
         for lib in steam_library_folders(steam):
             add(lib)
 
-    # 2. Common per-drive patterns
+    # Source 2: common per-drive folder patterns, in case the user installed
+    # Steam somewhere unusual (or has an extra library Steam doesn't know about).
     patterns = [
         ("Steam", "steamapps"),
         ("SteamLibrary", "steamapps"),
@@ -487,7 +480,7 @@ def scan_for_steam_apis(
         if on_progress is not None:
             try:
                 on_progress(msg)
-            except Exception:  # noqa: BLE001 — never let UI callbacks break the scan
+            except Exception:  # noqa: BLE001 - UI callbacks must not break the scan
                 pass
 
     libraries = list(libraries)
@@ -505,7 +498,7 @@ def scan_for_steam_apis(
         except OSError:
             continue
 
-        emit(f"[{lib_idx}/{len(libraries)}] Scanning {lib.parent} — {len(game_dirs)} games…")
+        emit(f"[{lib_idx}/{len(libraries)}] Scanning {lib.parent} - {len(game_dirs)} games…")
 
         lib_hits = 0
         for game_dir in game_dirs:
@@ -529,10 +522,6 @@ def scan_for_steam_apis(
     emit(f"Scan complete: {len(results)} Steamworks DLL(s) across {len(libraries)} libraries.")
     return results
 
-
-# ---------------------------------------------------------------------------
-# Persistence
-# ---------------------------------------------------------------------------
 
 @dataclass
 class AppState:

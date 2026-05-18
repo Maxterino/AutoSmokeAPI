@@ -1,4 +1,4 @@
-"""AutoSmokeAPI — a GUI to apply SmokeAPI (proxy mode) to many Steam games at once.
+"""AutoSmokeAPI - a GUI to apply SmokeAPI (proxy mode) to many Steam games at once.
 
 Theme: white background with lime green (#00ff64) accents.
 """
@@ -23,7 +23,7 @@ except ImportError:
 try:
     from tkinterdnd2 import DND_FILES, TkinterDnD
     DND_AVAILABLE = True
-except ImportError:  # pragma: no cover — graceful fallback
+except ImportError:
     DND_AVAILABLE = False
 
 from core import (
@@ -65,8 +65,6 @@ LOGO_PNG = LOGO_DIR / "smokeapilogotransparant.png"
 GUI_REPO_URL = "https://github.com/Maxterino/AutoSmokeAPI"
 SMOKEAPI_REPO_URL = "https://github.com/acidicoala/SmokeAPI"
 
-
-# Palette
 COLOR_BG = "#FFFFFF"
 COLOR_BG_ALT = "#F5F7F5"
 COLOR_CARD = "#FFFFFF"
@@ -85,10 +83,6 @@ COLOR_WARN = "#F0A93B"
 FONT_FAMILY = "Segoe UI"
 
 
-# ---------------------------------------------------------------------------
-# DnD-aware root window
-# ---------------------------------------------------------------------------
-
 if DND_AVAILABLE:
     class _DndCTk(ctk.CTk, TkinterDnD.DnDWrapper):
         def __init__(self, *a, **kw):
@@ -98,10 +92,6 @@ if DND_AVAILABLE:
 else:
     RootCls = ctk.CTk
 
-
-# ---------------------------------------------------------------------------
-# Tooltip
-# ---------------------------------------------------------------------------
 
 class Tooltip:
     """Hover tooltip that appears after `delay_ms` over its target widget."""
@@ -156,12 +146,8 @@ class Tooltip:
             self._tip = None
 
 
-# ---------------------------------------------------------------------------
-# Game row widget
-# ---------------------------------------------------------------------------
-
 class GameRow(ctk.CTkFrame):
-    """One row in the games list — checkbox, name, path, status, arch, remove."""
+    """One row in the games list."""
 
     def __init__(self, master, game: Game, on_remove, on_toggle, on_open_folder):
         super().__init__(
@@ -185,11 +171,8 @@ class GameRow(ctk.CTkFrame):
         self._load_thumbnail_async()
 
     def _build(self):
-        # Pack order matters: pack fixed-width sides FIRST, then the expanding
-        # middle. Otherwise expand=True claims all space before the right
-        # side gets its requested width.
-
-        # Left: selection checkbox
+        # Pack the fixed-width sides FIRST so the expanding middle doesn't
+        # claim their requested width.
         cb = ctk.CTkCheckBox(
             self,
             text="",
@@ -207,23 +190,20 @@ class GameRow(ctk.CTkFrame):
         )
         cb.pack(side="left", padx=(14, 6), pady=10)
 
-        # Thumbnail (Steam header image, lazy-loaded).
         self.thumb_label = ctk.CTkLabel(
             self,
             text="",
             width=92,
-            height=43,  # 92x43 = roughly 460x215 scaled
+            height=43,  # 92x43 keeps Steam's 460x215 aspect ratio
             fg_color=COLOR_BG_ALT,
             corner_radius=6,
         )
         self.thumb_label.pack(side="left", padx=(4, 4), pady=10)
 
-        # Right side: badges + remove button (stacked) — packed BEFORE middle.
         right = ctk.CTkFrame(self, fg_color="transparent", width=170)
         right.pack(side="right", padx=(4, 10), pady=8, fill="y")
         right.pack_propagate(False)
 
-        # Middle: name + path — claims remaining space.
         text_frame = ctk.CTkFrame(self, fg_color="transparent")
         text_frame.pack(side="left", fill="both", expand=True, padx=(4, 8), pady=10)
 
@@ -252,7 +232,7 @@ class GameRow(ctk.CTkFrame):
 
         self.arch_badge = ctk.CTkLabel(
             badge_row,
-            text="—",
+            text="-",
             width=44,
             height=22,
             font=(FONT_FAMILY, 10, "bold"),
@@ -337,7 +317,6 @@ class GameRow(ctk.CTkFrame):
 
     def refresh_status(self):
         self.game.refresh()
-        # Arch badge
         if self.game.arch == ARCH_64:
             self.arch_badge.configure(text="x64", fg_color="#E8FBEE", text_color=COLOR_ACCENT_DARKER)
         elif self.game.arch == ARCH_32:
@@ -345,7 +324,6 @@ class GameRow(ctk.CTkFrame):
         else:
             self.arch_badge.configure(text="?", fg_color=COLOR_BG_ALT, text_color=COLOR_TEXT_DIM)
 
-        # Status badge
         status = self.game.status()
         if status == STATUS_PATCHED:
             self.status_badge.configure(text="PATCHED", fg_color=COLOR_ACCENT, text_color=COLOR_TEXT)
@@ -359,10 +337,6 @@ class GameRow(ctk.CTkFrame):
         self.name_label.configure(text=self.game.name or "Unknown game")
         self.path_label.configure(text=self.game.path)
 
-
-# ---------------------------------------------------------------------------
-# Main application
-# ---------------------------------------------------------------------------
 
 class App(RootCls):
     DEFAULT_WIDTH = 720
@@ -392,7 +366,6 @@ class App(RootCls):
 
         self._build_ui()
 
-        # Restore previously tracked games
         for g in self.state_obj.games:
             self._add_game(g, persist=False)
 
@@ -403,8 +376,8 @@ class App(RootCls):
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self.after(400, self._check_updates_async)
 
-        # Bring the window forward on startup (some Windows shells leave it
-        # behind / minimized when launched from a non-foreground process).
+        # Some Windows shells leave the window minimized when launched from a
+        # non-foreground process; force it forward.
         self.after(50, self._raise_window)
 
     def _raise_window(self):
@@ -412,33 +385,27 @@ class App(RootCls):
             self.deiconify()
             self.lift()
             self.focus_force()
-            # Briefly mark topmost then turn it off — pops the window above
-            # other windows without keeping it pinned.
+            # Topmost flip pops the window above others without pinning it.
             self.attributes("-topmost", True)
             self.after(150, lambda: self.attributes("-topmost", False))
         except tk.TclError:
             pass
 
-    # -- Window setup -------------------------------------------------------
-
     def _apply_window_geometry(self):
-        """Choose a sensible size based on the monitor and center the window."""
         screen_w = self.winfo_screenwidth()
         screen_h = self.winfo_screenheight()
-        # Use the default size but cap at 90% of the monitor.
         w = min(self.DEFAULT_WIDTH, int(screen_w * 0.9))
         h = min(self.DEFAULT_HEIGHT, int(screen_h * 0.9))
         w = max(self.MIN_WIDTH, w)
         h = max(self.MIN_HEIGHT, h)
-        # Account for taskbar / title bar a bit when computing center y.
+        # Nudge y up a bit to account for the taskbar.
         x = max(0, (screen_w - w) // 2)
         y = max(0, (screen_h - h) // 2 - 20)
         self.geometry(f"{w}x{h}+{x}+{y}")
 
     def _apply_window_icon(self):
-        """Set both the title-bar icon and the Windows taskbar icon."""
-        # On Windows, set an AppUserModelID first so the taskbar groups the
-        # window under our icon instead of the Python launcher's icon.
+        # AppUserModelID makes the taskbar group the window under our own
+        # icon instead of Python's.
         if sys.platform == "win32":
             try:
                 import ctypes
@@ -454,17 +421,14 @@ class App(RootCls):
             except tk.TclError:
                 pass
 
-    # -- UI construction ----------------------------------------------------
-
     def _build_ui(self):
-        # Pack-based layout: tops pack downward, bottoms pack upward, games fills middle.
         self._build_header()
         underline = ctk.CTkFrame(self, height=2, fg_color=COLOR_ACCENT)
         underline.pack(side="top", fill="x", padx=24, pady=(8, 0))
         self._build_action_bar()
         self._build_options_row()
-        # Footer + log first (side=bottom) so they reserve their height,
-        # then games claims the remaining middle with expand=True.
+        # Footer + log first (side=bottom) so they reserve their height;
+        # games then fills the middle via expand=True.
         self._build_footer()
         self._build_log_panel()
         self._build_games_section()
@@ -489,7 +453,6 @@ class App(RootCls):
             text_color=COLOR_TEXT,
         ).grid(row=0, column=1, sticky="w")
 
-        # Stack the version label and (when available) the update button.
         version_box = ctk.CTkFrame(title_row, fg_color="transparent")
         version_box.grid(row=0, column=3, sticky="ne", pady=(4, 0))
 
@@ -529,9 +492,9 @@ class App(RootCls):
         ).grid(row=1, column=0, sticky="w", pady=(4, 0))
 
     def _build_action_bar(self):
+        # Layout: select | scan | <spacer> | patch | revert
         bar = ctk.CTkFrame(self, fg_color="transparent")
         bar.pack(side="top", fill="x", padx=24, pady=(14, 6))
-        # 5-column grid: select | scan | (spacer, weight=1) | patch | revert
         bar.grid_columnconfigure(2, weight=1)
 
         self.select_btn = self._make_button(
@@ -680,12 +643,12 @@ class App(RootCls):
 
         tooltip_text = (
             "SmokeAPI.config.json controls how SmokeAPI behaves:\n\n"
-            "• logging — writes debug logs (the default, which is why this is off; "
+            "• logging - writes debug logs (the default, which is why this is off; "
             "logging slows games down).\n"
-            "• default_app_status — 'unlocked' (default), 'locked', or 'original'.\n"
-            "• override_app_status / override_dlc_status — opt specific DLCs in or out.\n"
-            "• auto_inject_inventory — injects inventory items the game queries for.\n"
-            "• extra_dlcs — manually add DLC IDs for games whose API capped the response.\n\n"
+            "• default_app_status - 'unlocked' (default), 'locked', or 'original'.\n"
+            "• override_app_status / override_dlc_status - opt specific DLCs in or out.\n"
+            "• auto_inject_inventory - injects inventory items the game queries for.\n"
+            "• extra_dlcs - manually add DLC IDs for games whose API capped the response.\n\n"
             "Most users do NOT need this file. Only enable if you have a specific reason "
             "(e.g. troubleshooting, or a game with hardcoded DLC list). Hover-info."
         )
@@ -717,7 +680,6 @@ class App(RootCls):
         )
         self.count_label.grid(row=0, column=2, sticky="e")
 
-        # Container with subtle border
         outer = ctk.CTkFrame(
             wrap,
             fg_color=COLOR_BG_ALT,
@@ -839,8 +801,6 @@ class App(RootCls):
         smoke_link.pack(side="left")
         smoke_link.bind("<Button-1>", lambda _e: webbrowser.open(SMOKEAPI_REPO_URL))
 
-    # -- Game list management ----------------------------------------------
-
     def _hide_empty(self):
         if self.empty_label is not None and self.empty_label.winfo_exists():
             self.empty_label.pack_forget()
@@ -855,8 +815,8 @@ class App(RootCls):
         if key in self.rows:
             return False
 
-        # If we received a path that points at the backup _o.dll (from a scan
-        # of an already-patched game), normalize to the canonical filename.
+        # Normalize backup _o.dll paths back to the canonical filename so an
+        # already-patched game shows under its real name in the list.
         p = Path(game.path)
         if p.name.lower() in ("steam_api64_o.dll", "steam_api_o.dll"):
             canonical = p.with_name("steam_api64.dll" if "64" in p.name.lower() else "steam_api.dll")
@@ -925,7 +885,7 @@ class App(RootCls):
         if not messagebox.askyesno(
             "Remove all games?",
             f"Remove all {n} game(s) from the list?\n\n"
-            "This only clears them from this list — it does NOT revert any patches.\n"
+            "This only clears them from this list - it does NOT revert any patches.\n"
             "Use 'Revert' first if you want to undo SmokeAPI on patched games.",
             parent=self,
         ):
@@ -952,8 +912,6 @@ class App(RootCls):
         else:
             self.log(f"Folder not found: {folder}")
 
-    # -- User actions -------------------------------------------------------
-
     def _on_select_game(self):
         paths = filedialog.askopenfilenames(
             title="Select steam_api.dll or steam_api64.dll",
@@ -972,7 +930,7 @@ class App(RootCls):
         if added:
             self.log(f"Added {added} game(s).")
         for line in skipped:
-            self.log(f"Skipped — {line}")
+            self.log(f"Skipped - {line}")
 
     def _add_path_if_valid(self, path_str: str) -> tuple[bool, str | None]:
         p = Path(path_str)
@@ -980,7 +938,7 @@ class App(RootCls):
             return False, "file not found"
         name = p.name.lower()
         if name in ("steam_api64_o.dll", "steam_api_o.dll"):
-            # User pointed at the backup — fine, we'll track the canonical name.
+            # User picked the backup; track the canonical filename instead.
             canonical = p.with_name("steam_api64.dll" if "64" in name else "steam_api.dll")
             game = Game(path=str(canonical))
         elif steam_dll_kind(p) is None:
@@ -992,7 +950,8 @@ class App(RootCls):
         return False, "already added"
 
     def _on_drop(self, event):
-        # tkinterdnd2 returns a list-like string of paths, possibly braced
+        # tkinterdnd2 hands us a single string with paths separated by spaces;
+        # paths containing spaces are wrapped in {curly braces}.
         raw = event.data
         paths = self._parse_dnd_data(raw)
         added = 0
@@ -1030,7 +989,7 @@ class App(RootCls):
 
     def _on_scan_steam(self):
         if self._scan_thread is not None and self._scan_thread.is_alive():
-            # Second click = cancel.
+            # Second click on the button cancels the running scan.
             self._scan_cancel.set()
             self.scan_btn.configure(text="Cancelling…", state="disabled")
             return
@@ -1078,7 +1037,6 @@ class App(RootCls):
 
         added = 0
         for entry in results:
-            # results = list of (path, appid, name)
             if isinstance(entry, tuple):
                 path, appid, name = entry
             else:
@@ -1087,7 +1045,7 @@ class App(RootCls):
             ok = self._add_game(g)
             if ok:
                 added += 1
-        self._set_status(f"Scan complete — {added} new game(s) added, {len(results)} total found.")
+        self._set_status(f"Scan complete - {added} new game(s) added, {len(results)} total found.")
         self.log(f"Auto-scan: {added} added, {len(results)} discovered.")
 
     def _on_patch(self):
@@ -1123,7 +1081,6 @@ class App(RootCls):
         self._run_bulk(selected, "revert")
 
     def _run_bulk(self, rows: list[GameRow], action: str):
-        # Disable buttons during the operation
         self._set_busy(True)
         self._set_status(f"{'Patching' if action == 'patch' else 'Reverting'} {len(rows)} game(s)…")
         deploy_config = self.deploy_config_var.get() and action == "patch"
@@ -1142,7 +1099,7 @@ class App(RootCls):
                 except PatchError as e:
                     fail += 1
                     self._log_async(f"ERROR ({row.game.name}): {e}")
-                except Exception as e:  # noqa: BLE001 — top-level safety
+                except Exception as e:  # noqa: BLE001
                     fail += 1
                     self._log_async(f"UNEXPECTED ({row.game.name}): {e}")
                 self.after(0, row.refresh_status)
@@ -1155,7 +1112,7 @@ class App(RootCls):
         verb = "Patched" if action == "patch" else "Reverted"
         msg = f"{verb} {ok} game(s)"
         if fail:
-            msg += f" — {fail} failed (see log)"
+            msg += f" - {fail} failed (see log)"
         self._set_status(msg)
         self._save()
 
@@ -1167,8 +1124,6 @@ class App(RootCls):
     def _on_toggle_config(self):
         self.state_obj.deploy_config = self.deploy_config_var.get()
         self._save()
-
-    # -- Log ----------------------------------------------------------------
 
     def log(self, message: str):
         ts = datetime.now().strftime("%H:%M:%S")
@@ -1185,12 +1140,8 @@ class App(RootCls):
         self.log_text.delete("1.0", "end")
         self.log_text.configure(state="disabled")
 
-    # -- Status -------------------------------------------------------------
-
     def _set_status(self, text: str):
         self.status_label.configure(text=text)
-
-    # -- Updates ------------------------------------------------------------
 
     def _check_updates_async(self):
         self._installed_version = get_installed_version(SMOKE_DLL_64)
@@ -1221,7 +1172,6 @@ class App(RootCls):
         else:
             base = installed or "?"
             self.version_label.configure(text=f"SmokeAPI {base} (latest)")
-            # Hide the update button in case it was previously shown.
             try:
                 self.update_btn.pack_forget()
             except tk.TclError:
@@ -1235,7 +1185,7 @@ class App(RootCls):
         if not messagebox.askyesno(
             "Update SmokeAPI?",
             f"Download SmokeAPI {tag} and replace the bundled DLLs?\n\n"
-            "Your existing patched games will keep working — they don't need\n"
+            "Your existing patched games will keep working - they don't need\n"
             "to be re-patched unless you want them on the newer SmokeAPI.\n\n"
             "The previous DLLs are backed up as smoke_api*.dll.bak so you can\n"
             "roll back manually if needed.",
@@ -1261,7 +1211,6 @@ class App(RootCls):
         if ok:
             self.log(f"Update OK: {msg}")
             self._set_status(f"SmokeAPI updated to {tag}.")
-            # Re-detect the installed version (the DLL changed on disk).
             new_version = get_installed_version(SMOKE_DLL_64)
             self._installed_version = new_version
             if new_version:
@@ -1270,29 +1219,25 @@ class App(RootCls):
                     text_color=COLOR_TEXT_FAINT,
                 )
             self.update_btn.pack_forget()
-            # Refresh patch-status of each game (in case SmokeAPI's signature
-            # changed in a way the user wants to see reflected).
             for r in self.rows.values():
                 r.refresh_status()
             messagebox.showinfo(
                 "Update complete",
                 f"SmokeAPI updated to {tag}.\n\n"
                 "Newly patched games will use the new version automatically.\n"
-                "Already-patched games keep their currently installed DLL — "
+                "Already-patched games keep their currently installed DLL - "
                 "if you want them on the new version, click Revert then Patch.",
                 parent=self,
             )
         else:
             self.log(f"Update FAILED: {msg}")
-            self._set_status("Update failed — see Activity log.")
+            self._set_status("Update failed - see Activity log.")
             messagebox.showerror(
                 "Update failed",
                 f"Couldn't update SmokeAPI:\n\n{msg}\n\n"
                 "Your existing SmokeAPI installation was not changed.",
                 parent=self,
             )
-
-    # -- Persistence --------------------------------------------------------
 
     def _save(self):
         save_state(self.state_obj)
@@ -1304,7 +1249,6 @@ class App(RootCls):
 
 def main():
     if not SMOKEAPI_DIR.exists():
-        # Fail loudly so users notice the missing payload.
         root = tk.Tk()
         root.withdraw()
         messagebox.showerror(

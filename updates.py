@@ -17,7 +17,7 @@ from typing import Callable
 
 GITHUB_LATEST = "https://api.github.com/repos/acidicoala/SmokeAPI/releases/latest"
 
-# Files we expect inside the release zip — these are the ones we replace.
+# Filenames inside the release zip that we replace during an update.
 _ASSETS_OF_INTEREST = {"smoke_api32.dll", "smoke_api64.dll", "SmokeAPI.config.json"}
 
 
@@ -178,15 +178,14 @@ def install_release(
     except zipfile.BadZipFile as e:
         return False, f"Downloaded file is not a valid zip: {e}"
 
-    # Map basenames to ZipInfo entries.
     candidates: dict[str, zipfile.ZipInfo] = {}
     for info in zf.infolist():
         if info.is_dir():
             continue
         base = Path(info.filename).name
         if base in _ASSETS_OF_INTEREST:
-            # Prefer the one with the largest size if there are duplicates
-            # (sometimes archives contain both Windows + non-Windows copies).
+            # Some archives ship both the Windows DLL and a non-Windows copy
+            # with the same basename - the larger one is the Windows build.
             existing = candidates.get(base)
             if existing is None or info.file_size > existing.file_size:
                 candidates[base] = info
@@ -194,7 +193,6 @@ def install_release(
     if not candidates:
         return False, "Release zip didn't contain any expected SmokeAPI files."
 
-    # Back up existing files we're about to replace, then write new ones.
     replaced: list[str] = []
     failed: list[str] = []
     for name, info in candidates.items():

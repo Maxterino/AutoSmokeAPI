@@ -2,7 +2,7 @@
 
 Step-by-step for cutting a new release that shows up under the **Releases** tab on the repo. Everything below is one-time setup the first run, then a quick repeat each new version.
 
-## 0. One-time setup — push the repo
+## 0. One-time setup - push the repo
 
 If you haven't pushed the repo yet:
 
@@ -55,7 +55,7 @@ The `-a` flag makes it an "annotated" tag (the kind GitHub wants for releases).
 2. Click **Releases** in the right sidebar (or go to `…/releases`)
 3. Click **Draft a new release**
 4. **Choose a tag**: pick the `v1.0.0` tag you just pushed
-5. **Release title**: `AutoSmokeAPI v1.0.0` (or something nicer like `v1.0.0 — Initial release`)
+5. **Release title**: `AutoSmokeAPI v1.0.0` (or something nicer like `v1.0.0 - Initial release`)
 6. **Describe this release**: paste the changelog (template below)
 7. **Attach binaries**: drag `AutoSmokeAPI-v1.0.0.zip` into the "Attach binaries" box
 8. Leave **Set as a pre-release** unchecked (or check it if it's a beta)
@@ -75,7 +75,7 @@ Done. The zip will now appear under `…/releases/latest` and users can download
 - Drag-and-drop or browse for individual `steam_api(64).dll` files
 - Steam header art shown next to each game
 - Detects 32-bit vs 64-bit from PE header
-- Built-in SmokeAPI update check — click "Update available!" to fetch the latest from acidicoala's repo
+- Built-in SmokeAPI update check - click "Update available!" to fetch the latest from acidicoala's repo
 
 ## Install
 
@@ -83,7 +83,7 @@ Done. The zip will now appear under `…/releases/latest` and users can download
 2. Unzip anywhere (e.g. Desktop)
 3. Double-click `AutoSmokeAPI.exe`
 
-No Python, no installation. Windows SmartScreen may show "unknown publisher" on first run — click **More info → Run anyway**.
+No Python, no installation. Windows SmartScreen may show "unknown publisher" on first run - click **More info → Run anyway**.
 
 ## Credits
 
@@ -115,4 +115,4 @@ git push && git push origin v1.0.1
 
 - The first time a user downloads your .exe, Windows SmartScreen will show "Windows protected your PC" because the binary isn't code-signed. They click **More info → Run anyway**. To make this disappear permanently you'd need an EV code signing certificate (~$200-400/year), which probably isn't worth it for a free tool.
 - If a release zip turns out broken, you can edit the release on GitHub (delete the old asset, upload a new one). The download URL stays the same since it's based on the asset filename.
-- Don't delete old releases — older users may still be downloading them. Just publish a new one and GitHub will surface it as "latest".
+- Don't delete old releases - older users may still be downloading them. Just publish a new one and GitHub will surface it as "latest".
