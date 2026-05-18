@@ -10,19 +10,19 @@ Pick your games (or auto-scan), click **Patch**, done. Click **Revert** to undo.
 
 ---
 
-## Download
+## How to run
 
 **[Download the latest release →](https://github.com/Maxterino/AutoSmokeAPI/releases/latest)**
 
 1. Download `AutoSmokeAPI-vX.Y.Z.zip`
 2. Right-click → **Extract All…** (anywhere - your Desktop is fine)
-3. Open the extracted folder and double-click **`AutoSmokeAPI.exe`**
+3. Open the extracted folder and run **`AutoSmokeAPI.exe`**
 
 No installation. No Python. No setup. Everything is bundled inside the zip.
 
 ---
 
-## How to use it
+## How to use
 
 ### Adding games
 
