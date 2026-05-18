@@ -4,7 +4,9 @@ A simple Windows app that applies **[SmokeAPI](https://github.com/acidicoala/Smo
 
 Pick your games (or auto-scan), click **Patch**, done. Click **Revert** to undo.
 
-![screenshot](docs/screenshot.png)
+<p align="center">
+  <img src="logo/smokeapilogotransparant.png" width="220" alt="AutoSmokeAPI logo">
+</p>
 
 ---
 
