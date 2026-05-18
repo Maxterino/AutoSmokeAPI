@@ -29,9 +29,15 @@ a = Analysis(
     hookspath=[],
     runtime_hooks=[],
     excludes=[
-        # Trim unused stdlib + third-party stuff to shrink the bundle.
-        'tkinter.test', 'unittest', 'pydoc_data',
+        # Trim unused stdlib + third-party packages. Smaller bundle = less
+        # surface for AV heuristics to match against.
+        'tkinter.test', 'unittest', 'unittest.test',
+        'pydoc_data', 'pydoc',
+        'distutils', 'lib2to3', 'idlelib', 'turtledemo',
+        'test', 'tests',
         'matplotlib', 'numpy', 'scipy', 'pandas',
+        'IPython', 'jedi', 'parso',
+        'curses',
     ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,

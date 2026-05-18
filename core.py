@@ -35,6 +35,14 @@ STATUS_UNPATCHED = "unpatched"
 STATUS_MISSING = "missing"
 STATUS_UNKNOWN = "unknown"
 
+METHOD_PROXY = "proxy"
+METHOD_HOOK = "hook"
+
+# Self-Hook drops SmokeAPI under one of these Windows system-DLL names next to
+# the game's main .exe; version.dll has the broadest game compatibility.
+HOOK_DEFAULT_NAME = "version.dll"
+HOOK_VALID_NAMES = ("version.dll", "winhttp.dll", "winmm.dll")
+
 
 def detect_pe_arch(dll_path: Path) -> str:
     """Read the PE header and return ARCH_32, ARCH_64, or ARCH_UNKNOWN.
@@ -106,6 +114,14 @@ class Game:
     name: str = ""
     arch: str = ARCH_UNKNOWN
     appid: str = ""  # Steam app ID, used for the header image lookup
+    # Last patch method applied via this app: "" (none) / "proxy" / "hook".
+    patch_method: str = ""
+    # Hook-mode bookkeeping: where the main .exe is and which hijack DLL name
+    # we used. We need both to revert cleanly.
+    exe_path: str = ""
+    hook_dll_name: str = ""
+    # Whether we deployed a SmokeAPI.config.json the last time we patched.
+    config_deployed: bool = False
 
     @property
     def dll_path(self) -> Path:
@@ -119,8 +135,13 @@ class Game:
     def backup_path(self) -> Path:
         return backup_path_for(self.dll_path)
 
+    def hook_artifact(self) -> Path | None:
+        """Path of the hook-mode DLL we installed, if any."""
+        if not self.exe_path or not self.hook_dll_name:
+            return None
+        return Path(self.exe_path).parent / self.hook_dll_name
+
     def refresh(self) -> None:
-        """Re-detect arch and game name from disk."""
         if self.dll_path.exists():
             self.arch = detect_pe_arch(self.dll_path)
         elif self.backup_path.exists():
@@ -130,17 +151,25 @@ class Game:
         if not self.appid:
             self.appid = detect_appid_for_dll(self.dll_path) or ""
 
+    def has_proxy_patch(self) -> bool:
+        return self.backup_path.exists() and self.dll_path.exists()
+
+    def has_hook_patch(self) -> bool:
+        artifact = self.hook_artifact()
+        return artifact is not None and artifact.exists()
+
     def status(self) -> str:
-        """Determine patch status by checking the backup file and DLL contents."""
         dll = self.dll_path
         backup = self.backup_path
-        if not dll.exists() and not backup.exists():
-            return STATUS_MISSING
-        if backup.exists() and dll.exists():
+        if self.has_proxy_patch() or self.has_hook_patch():
             return STATUS_PATCHED
-        if dll.exists() and not backup.exists():
+        if dll.exists():
             return STATUS_UNPATCHED
-        return STATUS_UNKNOWN
+        if backup.exists():
+            # Proxy DLL gone but backup is still there - half-broken state, but
+            # we can revert from it.
+            return STATUS_PATCHED
+        return STATUS_MISSING
 
 
 def detect_game_name(dll_path: Path) -> str:
@@ -165,8 +194,78 @@ class PatchError(Exception):
     pass
 
 
-def patch_game(game: Game, *, deploy_config: bool = False) -> None:
-    """Apply SmokeAPI in proxy mode to this game."""
+# Filename keywords that almost certainly aren't the main game executable.
+_LAUNCHER_KEYWORDS = (
+    "launcher", "setup", "install", "uninstall", "unins", "redist",
+    "vcredist", "vc_redist", "directx", "dxsetup", "patcher", "updater",
+    "selfupdate", "crashreport", "crashpad", "crashhandler", "report",
+    "easyanticheat", "battleye", "be_service",
+)
+# Typical Steam-game subfolders that hold the real executable when the root
+# doesn't.
+_EXE_SEARCH_SUBFOLDERS = (
+    "bin", "binaries", "Binaries", "x64", "win64", "Win64",
+    "x86", "win32", "Win32", "game", "Game", "Bin",
+)
+
+
+def find_main_exe(game_folder: Path) -> Path | None:
+    """Best-effort guess of a game's main .exe under `game_folder`."""
+    if not game_folder.exists():
+        return None
+    seen: set[Path] = set()
+    candidates: list[Path] = []
+
+    def collect_from(loc: Path) -> None:
+        try:
+            for entry in loc.iterdir():
+                if not entry.is_file() or entry.suffix.lower() != ".exe":
+                    continue
+                name_lower = entry.stem.lower()
+                if any(kw in name_lower for kw in _LAUNCHER_KEYWORDS):
+                    continue
+                try:
+                    rp = entry.resolve()
+                except OSError:
+                    rp = entry
+                if rp in seen:
+                    continue
+                seen.add(rp)
+                candidates.append(entry)
+        except OSError:
+            return
+
+    collect_from(game_folder)
+    for sub in _EXE_SEARCH_SUBFOLDERS:
+        p = game_folder / sub
+        if p.exists():
+            collect_from(p)
+            for sub2 in _EXE_SEARCH_SUBFOLDERS:
+                pp = p / sub2
+                if pp.exists():
+                    collect_from(pp)
+
+    if not candidates:
+        return None
+    return max(candidates, key=lambda p: p.stat().st_size)
+
+
+def game_root_for(dll_path: Path) -> Path:
+    """Return the folder under `steamapps/common/<game>/` for any DLL inside the game tree."""
+    parts = dll_path.parts
+    lower = [p.lower() for p in parts]
+    try:
+        idx = lower.index("common")
+        if idx + 1 < len(parts):
+            return Path(*parts[: idx + 2])
+    except ValueError:
+        pass
+    return dll_path.parent
+
+
+# ----- Raw proxy-mode primitives -------------------------------------------
+
+def _patch_proxy(game: Game) -> None:
     dll = game.dll_path
     backup = game.backup_path
 
@@ -188,8 +287,8 @@ def patch_game(game: Game, *, deploy_config: bool = False) -> None:
         except OSError as e:
             raise PatchError(f"Could not rename {dll.name} -> {backup.name}: {e}") from e
     elif dll.exists():
-        # The backup already exists, so this DLL is the SmokeAPI proxy from a
-        # previous patch. Drop it and recopy to make sure we match our bundled version.
+        # Backup exists, so the current DLL is the SmokeAPI proxy from a
+        # previous patch. Replace it with our bundled (possibly newer) version.
         try:
             dll.unlink()
         except OSError as e:
@@ -198,7 +297,6 @@ def patch_game(game: Game, *, deploy_config: bool = False) -> None:
     try:
         shutil.copy2(source, dll)
     except OSError as e:
-        # Restore the backup so the game isn't left without any steam_api dll.
         if backup.exists() and not dll.exists():
             try:
                 backup.rename(dll)
@@ -206,41 +304,163 @@ def patch_game(game: Game, *, deploy_config: bool = False) -> None:
                 pass
         raise PatchError(f"Could not copy SmokeAPI DLL: {e}") from e
 
-    config_target = dll.with_name("SmokeAPI.config.json")
-    if deploy_config and SMOKE_CONFIG.exists():
-        try:
-            shutil.copy2(SMOKE_CONFIG, config_target)
-        except OSError as e:
-            raise PatchError(f"Patched, but failed to deploy config: {e}") from e
 
-
-def revert_game(game: Game) -> None:
-    """Revert a SmokeAPI patch by restoring the _o backup."""
+def _revert_proxy(game: Game) -> None:
     dll = game.dll_path
     backup = game.backup_path
-
     if not backup.exists():
-        if dll.exists() and game.status() == STATUS_UNPATCHED:
-            return
-        raise PatchError(f"No backup found to revert: {backup.name} missing")
-
+        return
     if dll.exists():
         try:
             dll.unlink()
         except OSError as e:
             raise PatchError(f"Could not remove SmokeAPI DLL: {e}") from e
-
     try:
         backup.rename(dll)
     except OSError as e:
         raise PatchError(f"Could not restore {backup.name} -> {dll.name}: {e}") from e
 
-    config_target = dll.with_name("SmokeAPI.config.json")
-    if config_target.exists():
-        try:
-            config_target.unlink()
-        except OSError:
-            pass
+
+# ----- Raw hook-mode primitives --------------------------------------------
+
+def _patch_hook(game: Game, hook_dll_name: str = HOOK_DEFAULT_NAME) -> None:
+    if hook_dll_name not in HOOK_VALID_NAMES:
+        raise PatchError(f"Invalid hook DLL name: {hook_dll_name}")
+    if not game.exe_path:
+        raise PatchError("Hook mode requires the game's main .exe path")
+    exe = Path(game.exe_path)
+    if not exe.exists():
+        raise PatchError(f"Game .exe not found: {exe}")
+
+    # Detect arch from the actual game DLL since the .exe alone doesn't always tell us.
+    target = game.dll_path if game.dll_path.exists() else game.backup_path
+    arch = detect_pe_arch(target) if target.exists() else detect_pe_arch(exe)
+    if arch == ARCH_UNKNOWN:
+        raise PatchError("Could not determine architecture for hook install")
+    game.arch = arch
+
+    source = smoke_source_dll(arch)
+    if not source.exists():
+        raise PatchError(f"Missing SmokeAPI DLL: {source}")
+
+    target_dll = exe.parent / hook_dll_name
+    try:
+        shutil.copy2(source, target_dll)
+    except OSError as e:
+        raise PatchError(f"Could not write {target_dll}: {e}") from e
+
+    game.hook_dll_name = hook_dll_name
+
+
+def _revert_hook(game: Game) -> None:
+    artifact = game.hook_artifact()
+    if artifact is None or not artifact.exists():
+        return
+    try:
+        artifact.unlink()
+    except OSError as e:
+        raise PatchError(f"Could not remove {artifact.name}: {e}") from e
+
+
+# ----- Config deploy/cleanup -----------------------------------------------
+
+def _config_target_for(game: Game, method: str) -> Path | None:
+    """Where SmokeAPI.config.json belongs for the given method."""
+    if method == METHOD_PROXY:
+        return game.dll_path.with_name("SmokeAPI.config.json")
+    if method == METHOD_HOOK and game.exe_path:
+        return Path(game.exe_path).parent / "SmokeAPI.config.json"
+    return None
+
+
+def _cleanup_stale_config(game: Game) -> None:
+    """Remove any SmokeAPI.config.json this game might have deployed previously,
+    regardless of which method was used.
+    """
+    candidates = [
+        game.dll_path.with_name("SmokeAPI.config.json"),
+    ]
+    if game.exe_path:
+        candidates.append(Path(game.exe_path).parent / "SmokeAPI.config.json")
+    for p in candidates:
+        if p.exists():
+            try:
+                p.unlink()
+            except OSError:
+                pass
+
+
+# ----- High-level patch/revert ---------------------------------------------
+
+def patch_game(
+    game: Game,
+    *,
+    method: str = METHOD_PROXY,
+    deploy_config: bool = False,
+    hook_dll_name: str = HOOK_DEFAULT_NAME,
+) -> None:
+    """Apply SmokeAPI in `method` mode, switching cleanly if the game was
+    previously patched with the other method. Also reconciles
+    `SmokeAPI.config.json` with `deploy_config`.
+    """
+    if method not in (METHOD_PROXY, METHOD_HOOK):
+        raise PatchError(f"Unknown patch method: {method}")
+
+    # If switching methods, tear down the old one first so we don't end up
+    # with both installed at once.
+    if method == METHOD_PROXY and game.has_hook_patch():
+        _revert_hook(game)
+    if method == METHOD_HOOK and game.has_proxy_patch():
+        _revert_proxy(game)
+
+    # Wipe any stale config from previous patches (either folder) before we
+    # decide whether to redeploy one in the new location.
+    _cleanup_stale_config(game)
+
+    if method == METHOD_PROXY:
+        _patch_proxy(game)
+    else:
+        _patch_hook(game, hook_dll_name=hook_dll_name)
+
+    game.patch_method = method
+
+    if deploy_config and SMOKE_CONFIG.exists():
+        target = _config_target_for(game, method)
+        if target is not None:
+            try:
+                shutil.copy2(SMOKE_CONFIG, target)
+                game.config_deployed = True
+            except OSError as e:
+                raise PatchError(f"Patched, but failed to deploy config: {e}") from e
+    else:
+        game.config_deployed = False
+
+
+def revert_game(game: Game) -> None:
+    """Revert whichever patch is currently installed (or recorded). Cleans up
+    any deployed SmokeAPI.config.json too.
+    """
+    reverted_anything = False
+
+    if game.has_proxy_patch() or game.backup_path.exists():
+        _revert_proxy(game)
+        reverted_anything = True
+
+    if game.has_hook_patch():
+        _revert_hook(game)
+        reverted_anything = True
+
+    _cleanup_stale_config(game)
+
+    if not reverted_anything and game.dll_path.exists():
+        # Already vanilla.
+        game.patch_method = ""
+        game.config_deployed = False
+        return
+
+    game.patch_method = ""
+    game.config_deployed = False
+    game.hook_dll_name = ""
 
 
 _VDF_PATH_RE = re.compile(r'"path"\s*"([^"]+)"', re.IGNORECASE)
@@ -527,10 +747,14 @@ def scan_for_steam_apis(
 class AppState:
     games: list[Game] = field(default_factory=list)
     deploy_config: bool = False
+    patch_method: str = METHOD_PROXY
+    appearance_mode: str = "light"  # "light" or "dark"
 
     def to_dict(self) -> dict:
         return {
             "deploy_config": self.deploy_config,
+            "patch_method": self.patch_method,
+            "appearance_mode": self.appearance_mode,
             "games": [asdict(g) for g in self.games],
         }
 
@@ -544,12 +768,25 @@ class AppState:
                     path=g.get("path", ""),
                     name=g.get("name", ""),
                     arch=g.get("arch", ARCH_UNKNOWN),
+                    appid=g.get("appid", ""),
+                    patch_method=g.get("patch_method", ""),
+                    exe_path=g.get("exe_path", ""),
+                    hook_dll_name=g.get("hook_dll_name", ""),
+                    config_deployed=bool(g.get("config_deployed", False)),
                 ))
             except TypeError:
                 continue
+        method = data.get("patch_method", METHOD_PROXY)
+        if method not in (METHOD_PROXY, METHOD_HOOK):
+            method = METHOD_PROXY
+        mode = data.get("appearance_mode", "light")
+        if mode not in ("light", "dark"):
+            mode = "light"
         return cls(
             games=games,
             deploy_config=bool(data.get("deploy_config", False)),
+            patch_method=method,
+            appearance_mode=mode,
         )
 
 

@@ -33,6 +33,9 @@ from core import (
     ARCH_UNKNOWN,
     AppState,
     Game,
+    HOOK_DEFAULT_NAME,
+    METHOD_HOOK,
+    METHOD_PROXY,
     PatchError,
     SMOKE_DLL_64,
     SMOKEAPI_DIR,
@@ -43,6 +46,8 @@ from core import (
     detect_game_name,
     detect_pe_arch,
     find_all_steamapps,
+    find_main_exe,
+    game_root_for,
     load_state,
     patch_game,
     revert_game,
@@ -65,20 +70,32 @@ LOGO_PNG = LOGO_DIR / "smokeapilogotransparant.png"
 GUI_REPO_URL = "https://github.com/Maxterino/AutoSmokeAPI"
 SMOKEAPI_REPO_URL = "https://github.com/acidicoala/SmokeAPI"
 
-COLOR_BG = "#FFFFFF"
-COLOR_BG_ALT = "#F5F7F5"
-COLOR_CARD = "#FFFFFF"
-COLOR_CARD_HOVER = "#F0FBF3"
-COLOR_BORDER = "#E1E6E1"
-COLOR_TEXT = "#0F1B12"
-COLOR_TEXT_DIM = "#5B6B5F"
-COLOR_TEXT_FAINT = "#8A9590"
-COLOR_ACCENT = "#00FF64"
-COLOR_ACCENT_DARK = "#00C24C"
-COLOR_ACCENT_DARKER = "#009C3D"
-COLOR_DANGER = "#E5484D"
-COLOR_DANGER_HOVER = "#C03A3F"
-COLOR_WARN = "#F0A93B"
+# Each color is (light_mode, dark_mode). CustomTkinter widgets that accept
+# a tuple here will auto-switch when ctk.set_appearance_mode() changes.
+COLOR_BG = ("#FFFFFF", "#0F1411")
+COLOR_BG_ALT = ("#F5F7F5", "#1A201C")
+COLOR_CARD = ("#FFFFFF", "#171E1A")
+COLOR_CARD_HOVER = ("#F0FBF3", "#1F2924")
+COLOR_BORDER = ("#E1E6E1", "#2A332C")
+COLOR_TEXT = ("#0F1B12", "#E8EFE9")
+COLOR_TEXT_DIM = ("#5B6B5F", "#9CA89F")
+COLOR_TEXT_FAINT = ("#8A9590", "#6A766C")
+COLOR_ACCENT = ("#00FF64", "#00FF64")
+COLOR_ACCENT_DARK = ("#00C24C", "#00C24C")
+COLOR_ACCENT_DARKER = ("#009C3D", "#00E058")
+COLOR_DANGER = ("#E5484D", "#FF6B70")
+COLOR_DANGER_HOVER = ("#C03A3F", "#E0484E")
+COLOR_WARN = ("#F0A93B", "#F5B454")
+
+# Soft tints used for status badges (dark variants stay readable but distinct).
+COLOR_BADGE_ARCH_X64 = ("#E8FBEE", "#0F2A18")
+COLOR_BADGE_ARCH_X64_TEXT = ("#009C3D", "#00FF64")
+COLOR_BADGE_ARCH_X86 = ("#FFF5DC", "#3A2F12")
+COLOR_BADGE_ARCH_X86_TEXT = ("#8A6A0F", "#F5B454")
+COLOR_BADGE_UNPATCHED = ("#E8ECEA", "#22282A")
+COLOR_BADGE_UNPATCHED_TEXT = ("#3D4A40", "#A0AAA3")
+COLOR_BADGE_MISSING = ("#FCE7E7", "#3A1E20")
+COLOR_BADGE_HOVER_DANGER = ("#FCE7E7", "#3A1E20")
 
 FONT_FAMILY = "Segoe UI"
 
@@ -94,24 +111,31 @@ else:
 
 
 class Tooltip:
-    """Hover tooltip that appears after `delay_ms` over its target widget."""
+    """Hover tooltip that appears after `delay_ms`, fading in/out smoothly."""
 
-    def __init__(self, widget, text: str, delay_ms: int = 1000, wraplength: int = 280):
+    # ~60 FPS animation steps (16 ms apart) totalling ~200 ms each way.
+    _FADE_DURATION_MS = 200
+    _FRAME_MS = 16
+    _STEPS = max(1, _FADE_DURATION_MS // _FRAME_MS)
+
+    def __init__(self, widget, text: str, delay_ms: int = 500, wraplength: int = 280):
         self.widget = widget
         self.text = text
         self.delay_ms = delay_ms
         self.wraplength = wraplength
         self._after_id: str | None = None
+        self._fade_after: str | None = None
         self._tip: tk.Toplevel | None = None
+        self._closing = False
         widget.bind("<Enter>", self._schedule, add="+")
         widget.bind("<Leave>", self._hide, add="+")
         widget.bind("<ButtonPress>", self._hide, add="+")
 
     def _schedule(self, _event=None):
-        self._cancel()
+        self._cancel_open()
         self._after_id = self.widget.after(self.delay_ms, self._show)
 
-    def _cancel(self):
+    def _cancel_open(self):
         if self._after_id is not None:
             try:
                 self.widget.after_cancel(self._after_id)
@@ -119,15 +143,28 @@ class Tooltip:
                 pass
             self._after_id = None
 
+    def _cancel_fade(self):
+        if self._fade_after is not None:
+            try:
+                self.widget.after_cancel(self._fade_after)
+            except tk.TclError:
+                pass
+            self._fade_after = None
+
     def _show(self):
         if self._tip is not None or not self.widget.winfo_exists():
             return
+        self._closing = False
         x = self.widget.winfo_rootx() + 24
         y = self.widget.winfo_rooty() + self.widget.winfo_height() + 6
         self._tip = tip = tk.Toplevel(self.widget)
         tip.wm_overrideredirect(True)
         tip.wm_geometry(f"+{x}+{y}")
-        tip.configure(bg=COLOR_BORDER)
+        tip.configure(bg="#2A332C")
+        try:
+            tip.attributes("-alpha", 0.0)
+        except tk.TclError:
+            pass
         inner = tk.Frame(tip, bg="#1F2A22", padx=10, pady=8)
         inner.pack(padx=1, pady=1)
         tk.Label(
@@ -135,15 +172,41 @@ class Tooltip:
             font=(FONT_FAMILY, 10), wraplength=self.wraplength,
             justify="left",
         ).pack()
+        self._fade(step=0, direction=1)
+
+    def _fade(self, *, step: int, direction: int):
+        """direction=1 fades in, direction=-1 fades out then destroys."""
+        if self._tip is None:
+            return
+        alpha = step / self._STEPS if direction > 0 else 1.0 - step / self._STEPS
+        alpha = max(0.0, min(1.0, alpha))
+        try:
+            self._tip.attributes("-alpha", alpha)
+        except tk.TclError:
+            return
+        if step < self._STEPS:
+            self._fade_after = self.widget.after(
+                self._FRAME_MS,
+                lambda: self._fade(step=step + 1, direction=direction),
+            )
+        else:
+            self._fade_after = None
+            if direction < 0:
+                # Fade-out finished, destroy the toplevel.
+                try:
+                    self._tip.destroy()
+                except tk.TclError:
+                    pass
+                self._tip = None
+                self._closing = False
 
     def _hide(self, _event=None):
-        self._cancel()
-        if self._tip is not None:
-            try:
-                self._tip.destroy()
-            except tk.TclError:
-                pass
-            self._tip = None
+        self._cancel_open()
+        if self._tip is None or self._closing:
+            return
+        self._closing = True
+        self._cancel_fade()
+        self._fade(step=0, direction=-1)
 
 
 class GameRow(ctk.CTkFrame):
@@ -167,8 +230,29 @@ class GameRow(ctk.CTkFrame):
         self.pack_propagate(False)
 
         self._build()
+        self._wire_card_click()
         self.refresh_status()
         self._load_thumbnail_async()
+
+    def _toggle_selected(self, _event=None):
+        self.selected.set(not self.selected.get())
+        self._on_toggle()
+
+    def _wire_card_click(self):
+        """Make the whole card act as a click-to-toggle area, except for the
+        interactive controls (checkbox / open-folder / remove buttons).
+        """
+        targets = [
+            self, self.thumb_label,
+            self.name_label, self.path_label,
+            self.arch_badge, self.status_badge, self.method_chip,
+        ]
+        for w in targets:
+            try:
+                w.bind("<Button-1>", self._toggle_selected)
+                w.configure(cursor="hand2")
+            except (tk.TclError, ValueError):
+                pass
 
     def _build(self):
         # Pack the fixed-width sides FIRST so the expanding middle doesn't
@@ -254,13 +338,24 @@ class GameRow(ctk.CTkFrame):
         )
         self.status_badge.pack(side="left")
 
+        # Small secondary line under the badges showing patch method + whether
+        # SmokeAPI.config.json was deployed. Hidden when the game isn't patched.
+        self.method_chip = ctk.CTkLabel(
+            right,
+            text="",
+            font=(FONT_FAMILY, 9, "italic"),
+            text_color=COLOR_TEXT_FAINT,
+            anchor="e",
+        )
+        self.method_chip.pack(anchor="e", pady=(2, 0))
+
         actions = ctk.CTkFrame(right, fg_color="transparent")
-        actions.pack(anchor="e", pady=(8, 0))
+        actions.pack(anchor="e", pady=(4, 0))
 
         open_btn = ctk.CTkButton(
             actions,
-            text="Open",
-            width=58,
+            text="Open folder",
+            width=82,
             height=24,
             font=(FONT_FAMILY, 10, "bold"),
             text_color=COLOR_TEXT,
@@ -281,7 +376,7 @@ class GameRow(ctk.CTkFrame):
             font=(FONT_FAMILY, 11, "bold"),
             text_color=COLOR_DANGER,
             fg_color=COLOR_BG_ALT,
-            hover_color="#FCE7E7",
+            hover_color=COLOR_BADGE_HOVER_DANGER,
             border_color=COLOR_BORDER,
             border_width=1,
             corner_radius=8,
@@ -318,21 +413,30 @@ class GameRow(ctk.CTkFrame):
     def refresh_status(self):
         self.game.refresh()
         if self.game.arch == ARCH_64:
-            self.arch_badge.configure(text="x64", fg_color="#E8FBEE", text_color=COLOR_ACCENT_DARKER)
+            self.arch_badge.configure(text="x64", fg_color=COLOR_BADGE_ARCH_X64, text_color=COLOR_BADGE_ARCH_X64_TEXT)
         elif self.game.arch == ARCH_32:
-            self.arch_badge.configure(text="x86", fg_color="#FFF5DC", text_color="#8A6A0F")
+            self.arch_badge.configure(text="x86", fg_color=COLOR_BADGE_ARCH_X86, text_color=COLOR_BADGE_ARCH_X86_TEXT)
         else:
             self.arch_badge.configure(text="?", fg_color=COLOR_BG_ALT, text_color=COLOR_TEXT_DIM)
 
         status = self.game.status()
         if status == STATUS_PATCHED:
-            self.status_badge.configure(text="PATCHED", fg_color=COLOR_ACCENT, text_color=COLOR_TEXT)
+            self.status_badge.configure(text="PATCHED", fg_color=COLOR_ACCENT, text_color=("#0F1B12", "#0F1B12"))
         elif status == STATUS_UNPATCHED:
-            self.status_badge.configure(text="UNPATCHED", fg_color="#E8ECEA", text_color="#3D4A40")
+            self.status_badge.configure(text="UNPATCHED", fg_color=COLOR_BADGE_UNPATCHED, text_color=COLOR_BADGE_UNPATCHED_TEXT)
         elif status == STATUS_MISSING:
-            self.status_badge.configure(text="MISSING", fg_color="#FCE7E7", text_color=COLOR_DANGER)
+            self.status_badge.configure(text="MISSING", fg_color=COLOR_BADGE_MISSING, text_color=COLOR_DANGER)
         else:
-            self.status_badge.configure(text="UNKNOWN", fg_color="#E8ECEA", text_color=COLOR_TEXT_DIM)
+            self.status_badge.configure(text="UNKNOWN", fg_color=COLOR_BADGE_UNPATCHED, text_color=COLOR_TEXT_DIM)
+
+        # Method + config chip: only meaningful while patched.
+        if status == STATUS_PATCHED and self.game.patch_method:
+            chip = f"via {self.game.patch_method}"
+            if self.game.config_deployed:
+                chip += "  +  config"
+            self.method_chip.configure(text=chip)
+        else:
+            self.method_chip.configure(text="")
 
         self.name_label.configure(text=self.game.name or "Unknown game")
         self.path_label.configure(text=self.game.path)
@@ -347,9 +451,11 @@ class App(RootCls):
     def __init__(self):
         super().__init__()
 
-        ctk.set_appearance_mode("light")
         ctk.set_widget_scaling(1.0)
         ctk.set_window_scaling(1.0)
+
+        self.state_obj: AppState = load_state()
+        ctk.set_appearance_mode(self.state_obj.appearance_mode)
 
         self.title("AutoSmokeAPI")
         self.configure(fg_color=COLOR_BG)
@@ -358,7 +464,6 @@ class App(RootCls):
 
         self._apply_window_icon()
 
-        self.state_obj: AppState = load_state()
         self.rows: dict[str, GameRow] = {}
         self.deploy_config_var = tk.BooleanVar(value=self.state_obj.deploy_config)
         self._scan_thread: threading.Thread | None = None
@@ -534,7 +639,7 @@ class App(RootCls):
             font=(FONT_FAMILY, 13, "bold"),
             text_color=COLOR_DANGER,
             fg_color=COLOR_BG,
-            hover_color="#FCE7E7",
+            hover_color=COLOR_BADGE_HOVER_DANGER,
             border_color=COLOR_DANGER,
             border_width=2,
         )
@@ -560,17 +665,15 @@ class App(RootCls):
         )
 
     def _build_options_row(self):
-        row_frame = ctk.CTkFrame(self, fg_color="transparent")
-        row_frame.pack(side="top", fill="x", padx=24, pady=(0, 8))
-        row_frame.grid_columnconfigure(3, weight=1)
+        # Row 1: list-selection helpers on the left, deploy-config on the right.
+        row1 = ctk.CTkFrame(self, fg_color="transparent")
+        row1.pack(side="top", fill="x", padx=24, pady=(0, 4))
+        row1.grid_columnconfigure(4, weight=1)
 
         self.select_all_btn = ctk.CTkButton(
-            row_frame,
-            text="Select all",
-            width=82, height=28,
+            row1, text="Select all", width=82, height=28,
             command=lambda: self._set_all_selected(True),
-            corner_radius=8,
-            font=(FONT_FAMILY, 11, "bold"),
+            corner_radius=8, font=(FONT_FAMILY, 11, "bold"),
             text_color=COLOR_TEXT_DIM,
             fg_color=COLOR_BG, hover_color=COLOR_CARD_HOVER,
             border_color=COLOR_BORDER, border_width=1,
@@ -578,12 +681,9 @@ class App(RootCls):
         self.select_all_btn.grid(row=0, column=0, padx=(0, 6))
 
         self.select_none_btn = ctk.CTkButton(
-            row_frame,
-            text="None",
-            width=64, height=28,
+            row1, text="Deselect all", width=92, height=28,
             command=lambda: self._set_all_selected(False),
-            corner_radius=8,
-            font=(FONT_FAMILY, 11, "bold"),
+            corner_radius=8, font=(FONT_FAMILY, 11, "bold"),
             text_color=COLOR_TEXT_DIM,
             fg_color=COLOR_BG, hover_color=COLOR_CARD_HOVER,
             border_color=COLOR_BORDER, border_width=1,
@@ -591,12 +691,9 @@ class App(RootCls):
         self.select_none_btn.grid(row=0, column=1, padx=(0, 6))
 
         self.refresh_btn = ctk.CTkButton(
-            row_frame,
-            text="Refresh",
-            width=82, height=28,
+            row1, text="Refresh", width=82, height=28,
             command=self._refresh_all,
-            corner_radius=8,
-            font=(FONT_FAMILY, 11, "bold"),
+            corner_radius=8, font=(FONT_FAMILY, 11, "bold"),
             text_color=COLOR_TEXT_DIM,
             fg_color=COLOR_BG, hover_color=COLOR_CARD_HOVER,
             border_color=COLOR_BORDER, border_width=1,
@@ -604,19 +701,66 @@ class App(RootCls):
         self.refresh_btn.grid(row=0, column=2, padx=(0, 6))
 
         self.remove_all_btn = ctk.CTkButton(
-            row_frame,
-            text="Remove all",
-            width=92, height=28,
+            row1, text="Remove all", width=92, height=28,
             command=self._on_remove_all,
-            corner_radius=8,
-            font=(FONT_FAMILY, 11, "bold"),
+            corner_radius=8, font=(FONT_FAMILY, 11, "bold"),
             text_color=COLOR_DANGER,
-            fg_color=COLOR_BG, hover_color="#FCE7E7",
+            fg_color=COLOR_BG, hover_color=COLOR_BADGE_HOVER_DANGER,
             border_color=COLOR_BORDER, border_width=1,
         )
         self.remove_all_btn.grid(row=0, column=3, sticky="w")
 
-        cfg_holder = ctk.CTkFrame(row_frame, fg_color="transparent")
+        # Row 2: patch method + deploy-config (both affect the next Patch click).
+        row2 = ctk.CTkFrame(self, fg_color="transparent")
+        row2.pack(side="top", fill="x", padx=24, pady=(0, 8))
+        row2.grid_columnconfigure(3, weight=1)
+
+        ctk.CTkLabel(
+            row2, text="Method:",
+            font=(FONT_FAMILY, 11, "bold"),
+            text_color=COLOR_TEXT_DIM,
+        ).grid(row=0, column=0, padx=(0, 6))
+
+        self.method_var = tk.StringVar(value=self.state_obj.patch_method.capitalize() or "Proxy")
+        self.method_menu = ctk.CTkOptionMenu(
+            row2,
+            values=["Proxy", "Hook"],
+            variable=self.method_var,
+            command=self._on_method_change,
+            width=100, height=28,
+            corner_radius=8,
+            font=(FONT_FAMILY, 11, "bold"),
+            text_color=COLOR_TEXT,
+            fg_color=COLOR_BG,
+            button_color=COLOR_ACCENT,
+            button_hover_color=COLOR_ACCENT_DARK,
+            dropdown_fg_color=COLOR_BG,
+            dropdown_hover_color=COLOR_CARD_HOVER,
+            dropdown_text_color=COLOR_TEXT,
+        )
+        self.method_menu.grid(row=0, column=1, padx=(0, 8))
+
+        self.method_hint = ctk.CTkLabel(
+            row2,
+            text="Didn't work? Try Hook mode",
+            font=(FONT_FAMILY, 10, "italic"),
+            text_color=COLOR_TEXT_FAINT,
+        )
+        self.method_hint.grid(row=0, column=2, sticky="w")
+
+        method_tooltip = (
+            "Proxy mode (default): SmokeAPI replaces steam_api(64).dll directly.\n"
+            "Works for most games whose steam_api lives next to the game .exe.\n\n"
+            "Hook mode (Self-Hook): drops SmokeAPI as version.dll next to the\n"
+            "game's main .exe. Try this if proxy mode doesn't unlock DLCs - "
+            "common for games where steam_api.dll is in a deep subfolder.\n\n"
+            "You can switch methods anytime. Re-patching will tear down the\n"
+            "old install and apply the new one cleanly."
+        )
+        Tooltip(self.method_menu, method_tooltip, delay_ms=500, wraplength=340)
+        Tooltip(self.method_hint, method_tooltip, delay_ms=500, wraplength=340)
+
+        cfg_holder = ctk.CTkFrame(row2, fg_color="transparent")
         cfg_holder.grid(row=0, column=4, sticky="e")
 
         cfg_cb = ctk.CTkCheckBox(
@@ -641,19 +785,18 @@ class App(RootCls):
         )
         warn_label.pack(side="left", padx=(6, 0))
 
-        tooltip_text = (
+        config_tooltip = (
             "SmokeAPI.config.json controls how SmokeAPI behaves:\n\n"
-            "• logging - writes debug logs (the default, which is why this is off; "
-            "logging slows games down).\n"
+            "• logging - writes debug logs (off by default for performance).\n"
             "• default_app_status - 'unlocked' (default), 'locked', or 'original'.\n"
             "• override_app_status / override_dlc_status - opt specific DLCs in or out.\n"
             "• auto_inject_inventory - injects inventory items the game queries for.\n"
             "• extra_dlcs - manually add DLC IDs for games whose API capped the response.\n\n"
             "Most users do NOT need this file. Only enable if you have a specific reason "
-            "(e.g. troubleshooting, or a game with hardcoded DLC list). Hover-info."
+            "(e.g. troubleshooting, or a game with a hardcoded DLC list)."
         )
-        Tooltip(cfg_cb, tooltip_text, delay_ms=1000, wraplength=320)
-        Tooltip(warn_label, tooltip_text, delay_ms=1000, wraplength=320)
+        Tooltip(cfg_cb, config_tooltip, delay_ms=500, wraplength=320)
+        Tooltip(warn_label, config_tooltip, delay_ms=500, wraplength=320)
 
     def _build_games_section(self):
         wrap = ctk.CTkFrame(self, fg_color="transparent")
@@ -767,7 +910,37 @@ class App(RootCls):
         footer = ctk.CTkFrame(self, fg_color="transparent", height=36)
         footer.pack(side="bottom", fill="x", padx=24, pady=(2, 14))
         footer.pack_propagate(False)
-        footer.grid_columnconfigure(0, weight=1)
+        footer.grid_columnconfigure(2, weight=1)
+
+        # Left side: sun / moon theme toggles, then the status text.
+        self.theme_box = ctk.CTkFrame(footer, fg_color="transparent")
+        self.theme_box.grid(row=0, column=0, sticky="w", padx=(0, 10))
+
+        self.sun_btn = ctk.CTkButton(
+            self.theme_box,
+            text="☀",
+            width=26, height=26, corner_radius=6,
+            font=(FONT_FAMILY, 14),
+            text_color=COLOR_TEXT,
+            fg_color="transparent",
+            hover_color=COLOR_CARD_HOVER,
+            border_width=0,
+            command=lambda: self._set_appearance("light"),
+        )
+        self.sun_btn.pack(side="left")
+
+        self.moon_btn = ctk.CTkButton(
+            self.theme_box,
+            text="🌙",
+            width=26, height=26, corner_radius=6,
+            font=(FONT_FAMILY, 13),
+            text_color=COLOR_TEXT,
+            fg_color="transparent",
+            hover_color=COLOR_CARD_HOVER,
+            border_width=0,
+            command=lambda: self._set_appearance("dark"),
+        )
+        self.moon_btn.pack(side="left", padx=(2, 0))
 
         self.status_label = ctk.CTkLabel(
             footer,
@@ -776,10 +949,10 @@ class App(RootCls):
             font=(FONT_FAMILY, 11),
             text_color=COLOR_TEXT_DIM,
         )
-        self.status_label.grid(row=0, column=0, sticky="w")
+        self.status_label.grid(row=0, column=1, sticky="w")
 
         links_box = ctk.CTkFrame(footer, fg_color="transparent")
-        links_box.grid(row=0, column=1, sticky="e")
+        links_box.grid(row=0, column=3, sticky="e")
 
         gui_link = ctk.CTkLabel(
             links_box,
@@ -800,6 +973,8 @@ class App(RootCls):
         )
         smoke_link.pack(side="left")
         smoke_link.bind("<Button-1>", lambda _e: webbrowser.open(SMOKEAPI_REPO_URL))
+
+        self._refresh_theme_toggle()
 
     def _hide_empty(self):
         if self.empty_label is not None and self.empty_label.winfo_exists():
@@ -1081,17 +1256,35 @@ class App(RootCls):
         self._run_bulk(selected, "revert")
 
     def _run_bulk(self, rows: list[GameRow], action: str):
+        deploy_config = self.deploy_config_var.get() and action == "patch"
+        method = self._current_method()
+
+        # For hook-mode patches we need to know each game's .exe up front. Try
+        # auto-detect; for failures, prompt the user. Skipping a game just drops
+        # it from this batch.
+        if action == "patch" and method == METHOD_HOOK:
+            rows = self._resolve_exe_paths(rows)
+            if not rows:
+                self.log("Hook patch cancelled - no games with a known .exe.")
+                return
+
         self._set_busy(True)
         self._set_status(f"{'Patching' if action == 'patch' else 'Reverting'} {len(rows)} game(s)…")
-        deploy_config = self.deploy_config_var.get() and action == "patch"
 
         def work():
             ok, fail = 0, 0
             for row in rows:
                 try:
                     if action == "patch":
-                        patch_game(row.game, deploy_config=deploy_config)
-                        self._log_async(f"Patched: {row.game.name}")
+                        patch_game(
+                            row.game,
+                            method=method,
+                            deploy_config=deploy_config,
+                        )
+                        suffix = f" via {method}"
+                        if deploy_config:
+                            suffix += " + config"
+                        self._log_async(f"Patched: {row.game.name}{suffix}")
                     else:
                         revert_game(row.game)
                         self._log_async(f"Reverted: {row.game.name}")
@@ -1106,6 +1299,40 @@ class App(RootCls):
             self.after(0, lambda: self._bulk_finished(action, ok, fail))
 
         threading.Thread(target=work, daemon=True).start()
+
+    def _current_method(self) -> str:
+        return METHOD_HOOK if self.method_var.get().lower() == "hook" else METHOD_PROXY
+
+    def _resolve_exe_paths(self, rows: list[GameRow]) -> list[GameRow]:
+        """For each row, make sure game.exe_path is set (auto-detect, then ask).
+        Returns the rows the user agreed to continue with.
+        """
+        kept: list[GameRow] = []
+        for row in rows:
+            game = row.game
+            if game.exe_path and Path(game.exe_path).exists():
+                kept.append(row)
+                continue
+            guess = find_main_exe(game_root_for(game.dll_path))
+            if guess is not None:
+                game.exe_path = str(guess)
+                self.log(f"{game.name}: detected .exe = {guess.name}")
+                kept.append(row)
+                continue
+            # Ask the user to pick it.
+            picked = filedialog.askopenfilename(
+                title=f"Pick the main .exe for: {game.name}",
+                initialdir=str(game_root_for(game.dll_path)),
+                filetypes=[("Executable", "*.exe"), ("All files", "*.*")],
+                parent=self,
+            )
+            if not picked:
+                self.log(f"Skipped (no .exe selected): {game.name}")
+                continue
+            game.exe_path = picked
+            kept.append(row)
+        self._save()
+        return kept
 
     def _bulk_finished(self, action: str, ok: int, fail: int):
         self._set_busy(False)
@@ -1124,6 +1351,34 @@ class App(RootCls):
     def _on_toggle_config(self):
         self.state_obj.deploy_config = self.deploy_config_var.get()
         self._save()
+
+    def _on_method_change(self, _choice: str = ""):
+        self.state_obj.patch_method = self._current_method()
+        self._save()
+        # The hint text now points to the *other* mode.
+        if self._current_method() == METHOD_HOOK:
+            self.method_hint.configure(text="Didn't work? Try Proxy mode")
+        else:
+            self.method_hint.configure(text="Didn't work? Try Hook mode")
+
+    def _set_appearance(self, mode: str):
+        if mode not in ("light", "dark"):
+            return
+        ctk.set_appearance_mode(mode)
+        self.state_obj.appearance_mode = mode
+        self._save()
+        self._refresh_theme_toggle()
+
+    def _refresh_theme_toggle(self):
+        """Highlight the active theme button with a lime-green outline."""
+        active_lime = COLOR_ACCENT
+        empty = ("#E1E6E1", "#2A332C")  # subtle outline for the inactive button
+        if self.state_obj.appearance_mode == "dark":
+            self.sun_btn.configure(border_width=1, border_color=empty)
+            self.moon_btn.configure(border_width=2, border_color=active_lime)
+        else:
+            self.sun_btn.configure(border_width=2, border_color=active_lime)
+            self.moon_btn.configure(border_width=1, border_color=empty)
 
     def log(self, message: str):
         ts = datetime.now().strftime("%H:%M:%S")

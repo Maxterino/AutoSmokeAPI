@@ -20,6 +20,22 @@ Pick your games (or auto-scan), click **Patch**, done. Click **Revert** to undo.
 
 No installation. No Python. No setup. Everything is bundled inside the zip.
 
+### Windows Defender / Chrome may flag the file - this is a false positive
+
+The .exe isn't signed (signing certificates cost ~$300/year), so Windows Defender and Chrome's download protection sometimes flag it on heuristics alone. **The source is open and auditable on this repo** - nothing is hidden. The flag means "unknown publisher", not "actually malicious".
+
+If your browser blocks the download:
+- **Chrome:** click the three-dot menu on the blocked download → **Keep** → **Keep anyway**.
+- **Edge:** click **…** → **Keep** → **Show more** → **Keep anyway**.
+
+If Defender quarantines the .exe after extraction:
+1. Open **Windows Security** (Start menu → "Windows Security")
+2. **Virus & threat protection** → **Protection history**
+3. Find the AutoSmokeAPI entry → click it → **Actions** → **Allow**
+4. Re-download or restore the file
+
+To skip the warning entirely, you can build the .exe yourself - source code is on this repo and `build.bat` does it in one step (see [Build from source](#build-from-source) below).
+
 ---
 
 ## How to use
@@ -40,16 +56,21 @@ Each game gets its Steam header image, an x86/x64 badge, and a status badge:
 
 ### Patching
 
-Tick the games you want to patch and click the green **Patch** button. The app will:
+Tick the games you want to patch, pick a **Method** if needed, and click the green **Patch** button.
 
-1. Rename the game's `steam_api.dll` → `steam_api_o.dll` (or `steam_api64.dll` → `steam_api64_o.dll`)
-2. Drop in SmokeAPI's DLL under the original name
+**Method: Proxy (default)** - SmokeAPI replaces `steam_api(64).dll` directly. Works for most games where the DLL sits next to the game executable.
 
-Now launch the game - all DLCs are unlocked.
+**Method: Hook** - SmokeAPI is installed as `version.dll` next to the game's main `.exe`. Try this if proxy mode doesn't unlock DLCs - especially common for games where `steam_api.dll` lives in a deep subfolder (e.g. Unreal Engine titles with `bin\x64\` layouts). AutoSmokeAPI auto-detects the game's `.exe`; if it can't, it asks you to pick it.
+
+Once patched, each game row shows a small chip:
+- `via proxy` or `via hook` - which method was used
+- `+ config` - if SmokeAPI.config.json was deployed alongside
+
+You can switch methods at any time - the app cleanly reverts the old install before applying the new one.
 
 ### Reverting
 
-Tick the games you want to revert and click **Revert**. The original Steamworks DLL is restored from the `_o` backup. The game is back to vanilla.
+Tick the games you want to revert and click **Revert**. AutoSmokeAPI removes whichever patch is currently installed (proxy backup, hook DLL, deployed config) and restores the game to vanilla.
 
 ### New DLC released?
 
